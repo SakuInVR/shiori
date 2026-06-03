@@ -1,0 +1,107 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// NextAuth models
+model Account {
+  id                 String  @id @default(cuid())
+  userId             String
+  type               String
+  provider           String
+  providerAccountId  String
+  refresh_token      String?
+  access_token       String?
+  expires_at         Int?
+  token_type         String?
+  scope              String?
+  id_token           String?
+  session_state      String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  passwordHash  String?
+  username      String?   @unique
+  accounts      Account[]
+  sessions      Session[]
+  books         UserBook[]
+  inspirations  Inspiration[]
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Application models
+model Book {
+  id            String   @id @default(cuid())
+  googleBooksId String   @unique
+  title         String
+  author        String
+  coverUrl      String?
+  description   String?
+  pageCount     Int?
+  userBooks     UserBook[]
+}
+
+model UserBook {
+  id            String   @id @default(cuid())
+  userId        String
+  bookId        String
+  currentPage   Int      @default(0)
+  status        String   @default("reading") // "reading", "completed", "wishlist"
+  isPublic      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  book          Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  inspirations  Inspiration[]
+
+  @@unique([userId, bookId])
+}
+
+model Inspiration {
+  id          String   @id @default(cuid())
+  userId      String
+  userBookId  String?
+  quote       String
+  thought     String
+  page        Int?
+  chapter     String?
+  prompt      String?
+  imageUrl    String?
+  tag         String    @default("Idea") // "Actionable", "Quote", "Question", "Idea"
+  cardStyle   String    @default("gradient-violet")
+  isPublic    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userBook    UserBook? @relation(fields: [userBookId], references: [id], onDelete: Cascade)
+}
