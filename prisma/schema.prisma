@@ -47,6 +47,9 @@ model User {
   sessions      Session[]
   books         UserBook[]
   inspirations  Inspiration[]
+  createdGroups Group[]       @relation("GroupCreator")
+  memberships   GroupMember[]
+  addedGroupBooks GroupBook[]
 }
 
 model VerificationToken {
@@ -67,6 +70,7 @@ model Book {
   description   String?
   pageCount     Int?
   userBooks     UserBook[]
+  groupBooks    GroupBook[]
 }
 
 model UserBook {
@@ -82,6 +86,7 @@ model UserBook {
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   book          Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
   inspirations  Inspiration[]
+  groupShares   GroupShare[]
 
   @@unique([userId, bookId])
 }
@@ -104,4 +109,73 @@ model Inspiration {
 
   user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   userBook    UserBook? @relation(fields: [userBookId], references: [id], onDelete: Cascade)
+  groupShares GroupNoteShare[]
 }
+
+model Group {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  inviteCode  String        @unique
+  createdById String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  createdBy   User          @relation("GroupCreator", fields: [createdById], references: [id])
+  members     GroupMember[]
+  books       GroupBook[]
+  shares      GroupShare[]
+  notes       GroupNoteShare[]
+}
+
+model GroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String
+  role      String   @default("member") // "admin", "member"
+  joinedAt  DateTime @default(now())
+
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model GroupBook {
+  id        String   @id @default(cuid())
+  groupId   String
+  bookId    String
+  addedById String
+  createdAt DateTime @default(now())
+
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  addedBy   User     @relation(fields: [addedById], references: [id])
+
+  @@unique([groupId, bookId])
+}
+
+model GroupShare {
+  id         String   @id @default(cuid())
+  groupId    String
+  userBookId String
+  createdAt  DateTime @default(now())
+
+  group      Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userBook   UserBook @relation(fields: [userBookId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userBookId])
+}
+
+model GroupNoteShare {
+  id            String      @id @default(cuid())
+  groupId       String
+  inspirationId String
+  createdAt     DateTime    @default(now())
+
+  group         Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  inspiration   Inspiration @relation(fields: [inspirationId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, inspirationId])
+}
+

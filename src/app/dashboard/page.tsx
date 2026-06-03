@@ -19,6 +19,7 @@ export default async function DashboardPage() {
     include: {
       book: true,
       inspirations: true,
+      groupShares: { select: { groupId: true } },
     },
     orderBy: { updatedAt: 'desc' },
   });
@@ -32,6 +33,7 @@ export default async function DashboardPage() {
           book: true,
         },
       },
+      groupShares: { select: { groupId: true } },
     },
     orderBy: { createdAt: 'desc' },
   });

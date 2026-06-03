@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Search, Book, Plus, Eye, EyeOff, Loader2, ArrowLeft } from 'lucide-react';
-import { addBookToShelf, searchBooks } from '@/app/actions';
+import { Search, Book, Plus, Eye, EyeOff, Loader2, ArrowLeft, Users } from 'lucide-react';
+import { addBookToShelf, searchBooks, getExistingAuthors, getGroups } from '@/app/actions';
 
 interface GoogleBookItem {
   id: string;
@@ -30,7 +30,7 @@ export default function AddBookClient() {
 
   // Adding state options
   const [status, setStatus] = useState('reading');
-  const [isPublic, setIsPublic] = useState(false);
+  const [privacyMode, setPrivacyMode] = useState<'private' | 'group' | 'public'>('private');
   const [adding, setAdding] = useState(false);
 
   // Manual Mode states
@@ -40,6 +40,27 @@ export default function AddBookClient() {
   const [manualCoverUrl, setManualCoverUrl] = useState('');
   const [manualDescription, setManualDescription] = useState('');
   const [manualPageCount, setManualPageCount] = useState<number | ''>('');
+
+  // Fetch unique authors in database for manual mode autocomplete suggestions
+  const [existingAuthors, setExistingAuthors] = useState<string[]>([]);
+
+  // Reading groups state
+  const [myGroups, setMyGroups] = useState<any[]>([]);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (isManualMode) {
+      getExistingAuthors().then((authors) => {
+        setExistingAuthors(authors);
+      });
+    }
+  }, [isManualMode]);
+
+  useEffect(() => {
+    getGroups().then((groupsList) => {
+      setMyGroups(groupsList);
+    });
+  }, []);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -71,7 +92,8 @@ export default function AddBookClient() {
   const handleSelectBook = (book: GoogleBookItem) => {
     setSelectedBook(book);
     setStatus('reading');
-    setIsPublic(false);
+    setPrivacyMode('private');
+    setSelectedGroupIds([]);
   };
 
   const handleAddBook = async () => {
@@ -89,7 +111,8 @@ export default function AddBookClient() {
       description: info.description || null,
       pageCount: info.pageCount || null,
       status,
-      isPublic,
+      isPublic: privacyMode === 'public',
+      groupIds: privacyMode === 'group' ? selectedGroupIds : [],
     };
 
     try {
@@ -126,7 +149,8 @@ export default function AddBookClient() {
       description: manualDescription.trim() || null,
       pageCount: manualPageCount !== '' ? Number(manualPageCount) : null,
       status,
-      isPublic,
+      isPublic: privacyMode === 'public',
+      groupIds: privacyMode === 'group' ? selectedGroupIds : [],
     };
 
     try {
@@ -215,7 +239,14 @@ export default function AddBookClient() {
                   value={manualAuthor}
                   onChange={(e) => setManualAuthor(e.target.value)}
                   disabled={adding}
+                  list="existing-authors-list"
+                  autoComplete="off"
                 />
+                <datalist id="existing-authors-list">
+                  {existingAuthors.map((author) => (
+                    <option key={author} value={author} />
+                  ))}
+                </datalist>
               </div>
 
               <div className="form-group">
@@ -281,29 +312,58 @@ export default function AddBookClient() {
                 </div>
 
                 <div className="form-group" style={{ marginTop: '1.25rem' }}>
-                  <label>プライバシー設定</label>
-                  <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-                    <button
-                      type="button"
-                      className={`btn ${!isPublic ? 'btn-primary' : 'btn-secondary'}`}
-                      style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.5rem', fontSize: '0.85rem' }}
-                      onClick={() => setIsPublic(false)}
-                      disabled={adding}
-                    >
-                      <EyeOff size={14} />
-                      <span>非公開 (マイ本棚のみ)</span>
-                    </button>
-                    <button
-                      type="button"
-                      className={`btn ${isPublic ? 'btn-primary' : 'btn-secondary'}`}
-                      style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem', padding: '0.5rem', fontSize: '0.85rem' }}
-                      onClick={() => setIsPublic(true)}
-                      disabled={adding}
-                    >
-                      <Eye size={14} />
-                      <span>公開 (コミュニティ)</span>
-                    </button>
+                  <label>公開範囲 (プライバシー設定)</label>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                    {[
+                      { val: 'private', label: '🔒 非公開', desc: '自分のみ' },
+                      { val: 'group', label: '👥 限定公開', desc: 'グループのみ' },
+                      { val: 'public', label: '🌐 全体公開', desc: 'コミュニティ' },
+                    ].map((opt) => (
+                      <button
+                        key={opt.val}
+                        type="button"
+                        className={`btn ${privacyMode === opt.val ? 'btn-primary' : 'btn-secondary'}`}
+                        style={{ flex: 1, minWidth: '100px', padding: '0.4rem', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', height: 'auto', gap: '0.1rem' }}
+                        onClick={() => setPrivacyMode(opt.val as any)}
+                        disabled={adding}
+                      >
+                        <span style={{ fontWeight: 'bold' }}>{opt.label}</span>
+                        <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>{opt.desc}</span>
+                      </button>
+                    ))}
                   </div>
+
+                  {privacyMode === 'group' && (
+                    <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', borderRadius: '8px' }}>
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>共有するグループを選択:</div>
+                      {myGroups.length === 0 ? (
+                        <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>参加しているグループがありません。</p>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          {myGroups.map((group) => {
+                            const checked = selectedGroupIds.includes(group.id);
+                            return (
+                              <label key={group.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedGroupIds([...selectedGroupIds, group.id]);
+                                    } else {
+                                      setSelectedGroupIds(selectedGroupIds.filter((id) => id !== group.id));
+                                    }
+                                  }}
+                                  disabled={adding}
+                                />
+                                <span>{group.name}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -544,31 +604,60 @@ export default function AddBookClient() {
               </div>
 
               <div className="form-group" style={{ marginTop: '1.5rem' }}>
-                <label>プライバシー設定</label>
-                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.5rem' }}>
-                  <button
-                    type="button"
-                    className={`btn ${!isPublic ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-                    onClick={() => setIsPublic(false)}
-                    disabled={adding}
-                  >
-                    <EyeOff size={16} />
-                    <span>非公開 (マイ本棚のみ)</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn ${isPublic ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}
-                    onClick={() => setIsPublic(true)}
-                    disabled={adding}
-                  >
-                    <Eye size={16} />
-                    <span>公開 (コミュニティに公開)</span>
-                  </button>
+                <label>公開範囲 (プライバシー設定)</label>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
+                  {[
+                    { val: 'private', label: '🔒 非公開', desc: '自分のみ' },
+                    { val: 'group', label: '👥 限定公開', desc: 'グループのみ' },
+                    { val: 'public', label: '🌐 全体公開', desc: 'コミュニティ' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      className={`btn ${privacyMode === opt.val ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ flex: 1, minWidth: '100px', padding: '0.4rem', fontSize: '0.8rem', display: 'flex', flexDirection: 'column', height: 'auto', gap: '0.1rem' }}
+                      onClick={() => setPrivacyMode(opt.val as any)}
+                      disabled={adding}
+                    >
+                      <span style={{ fontWeight: 'bold' }}>{opt.label}</span>
+                      <span style={{ fontSize: '0.65rem', opacity: 0.8 }}>{opt.desc}</span>
+                    </button>
+                  ))}
                 </div>
+
+                {privacyMode === 'group' && (
+                  <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>共有するグループを選択:</div>
+                    {myGroups.length === 0 ? (
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>参加しているグループがありません。</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        {myGroups.map((group) => {
+                          const checked = selectedGroupIds.includes(group.id);
+                          return (
+                            <label key={group.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedGroupIds([...selectedGroupIds, group.id]);
+                                  } else {
+                                    setSelectedGroupIds(selectedGroupIds.filter((id) => id !== group.id));
+                                  }
+                                }}
+                                disabled={adding}
+                              />
+                              <span>{group.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem', lineHeight: 1.4 }}>
-                  ※ 公開に設定すると、コミュニティ広場のタイムラインや、あなたの公開プロファイルページに本棚が表示され、他の読書家から本や読了状況が見えるようになります。
+                  ※ 全体公開に設定すると、コミュニティ広場のタイムラインや、あなたの公開プロファイルページに本棚が表示され、他の読書家から本や読了状況が見えるようになります。
                 </p>
               </div>
             </div>

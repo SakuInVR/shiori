@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
@@ -26,6 +26,9 @@ import {
   Edit2,
   Sparkles,
   Camera,
+  Users,
+  Check,
+  Loader2,
 } from 'lucide-react';
 import Tesseract from 'tesseract.js';
 import {
@@ -36,6 +39,8 @@ import {
   toggleBookPrivacy,
   deleteInspirationNote,
   toggleNotePrivacy,
+  getGroups,
+  shareBookToGroups,
 } from '@/app/actions';
 
 interface BookType {
@@ -59,6 +64,7 @@ interface UserBookType {
   updatedAt: Date;
   book: BookType;
   inspirations: any[];
+  groupShares?: { groupId: string }[];
 }
 
 interface DashboardClientProps {
@@ -91,9 +97,25 @@ export default function DashboardClient({
   const [prompt, setPrompt] = useState('');
   const [tag, setTag] = useState('Idea');
   const [cardStyle, setCardStyle] = useState('gradient-violet');
-  const [noteIsPublic, setNoteIsPublic] = useState(false);
+  const [notePrivacyMode, setNotePrivacyMode] = useState<'private' | 'group' | 'public'>('private');
+  const [noteSelectedGroupIds, setNoteSelectedGroupIds] = useState<string[]>([]);
   const [imageUrl, setImageUrl] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
+
+  // Groups state
+  const [myGroups, setMyGroups] = useState<any[]>([]);
+
+  // Book Privacy Dialog States
+  const [editingBookPrivacy, setEditingBookPrivacy] = useState<UserBookType | null>(null);
+  const [editingBookPrivacyMode, setEditingBookPrivacyMode] = useState<'private' | 'group' | 'public'>('private');
+  const [editingBookSelectedGroupIds, setEditingBookSelectedGroupIds] = useState<string[]>([]);
+  const [privacySaving, setPrivacySaving] = useState(false);
+
+  useEffect(() => {
+    getGroups().then((groupsList) => {
+      setMyGroups(groupsList);
+    });
+  }, []);
 
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -222,7 +244,8 @@ export default function DashboardClient({
     setPrompt('');
     setTag('Idea');
     setCardStyle('gradient-dark'); // Charcoal gradient for quick jot
-    setNoteIsPublic(false);
+    setNotePrivacyMode('private');
+    setNoteSelectedGroupIds([]);
     setImageUrl('');
     setIsNoteDrawerOpen(true);
   };
@@ -238,7 +261,12 @@ export default function DashboardClient({
     setPrompt('');
     setTag('Idea');
     setCardStyle('gradient-violet');
-    setNoteIsPublic(ub.isPublic);
+    setNotePrivacyMode(ub.isPublic ? 'public' : 'private');
+    const initialGroups = ub.groupShares?.map((gs) => gs.groupId) || [];
+    setNoteSelectedGroupIds(initialGroups);
+    if (initialGroups.length > 0 && !ub.isPublic) {
+      setNotePrivacyMode('group');
+    }
     setImageUrl('');
     setIsNoteDrawerOpen(true);
   };
@@ -254,7 +282,17 @@ export default function DashboardClient({
     setPrompt(note.prompt || '');
     setTag(note.tag);
     setCardStyle(note.cardStyle);
-    setNoteIsPublic(note.isPublic);
+    
+    const sharedGroups = note.groupShares?.map((gs: any) => gs.groupId) || [];
+    setNoteSelectedGroupIds(sharedGroups);
+    if (note.isPublic) {
+      setNotePrivacyMode('public');
+    } else if (sharedGroups.length > 0) {
+      setNotePrivacyMode('group');
+    } else {
+      setNotePrivacyMode('private');
+    }
+
     setImageUrl(note.imageUrl || '');
     setIsNoteDrawerOpen(true);
   };
@@ -267,6 +305,7 @@ export default function DashboardClient({
     setError('');
 
     const uBookId = selectedBookIdForNote || null;
+    const gIds = notePrivacyMode === 'group' ? noteSelectedGroupIds : [];
 
     try {
       let res;
@@ -281,7 +320,8 @@ export default function DashboardClient({
           imageUrl: imageUrl.trim() || null,
           tag,
           cardStyle,
-          isPublic: noteIsPublic,
+          isPublic: notePrivacyMode === 'public',
+          groupIds: gIds,
         });
       } else {
         res = await createInspirationNote({
@@ -294,7 +334,8 @@ export default function DashboardClient({
           imageUrl: imageUrl.trim() || null,
           tag,
           cardStyle,
-          isPublic: noteIsPublic,
+          isPublic: notePrivacyMode === 'public',
+          groupIds: gIds,
         });
       }
 
@@ -340,12 +381,35 @@ export default function DashboardClient({
     }
   };
 
-  const handleToggleBookPrivacy = async (ub: UserBookType) => {
-    const res = await toggleBookPrivacy(ub.id);
-    if (res?.error) {
-      alert(res.error);
-    } else {
-      router.refresh();
+  const handleStartEditBookPrivacy = (ub: UserBookType) => {
+    setEditingBookPrivacy(ub);
+    setEditingBookPrivacyMode(ub.isPublic ? 'public' : (ub.groupShares && ub.groupShares.length > 0) ? 'group' : 'private');
+    setEditingBookSelectedGroupIds(ub.groupShares?.map((gs) => gs.groupId) || []);
+  };
+
+  const handleSaveBookPrivacy = async () => {
+    if (!editingBookPrivacy) return;
+    setPrivacySaving(true);
+
+    try {
+      if ((editingBookPrivacyMode === 'public') !== editingBookPrivacy.isPublic) {
+        await toggleBookPrivacy(editingBookPrivacy.id);
+      }
+
+      const gIds = editingBookPrivacyMode === 'group' ? editingBookSelectedGroupIds : [];
+      const res = await shareBookToGroups(editingBookPrivacy.id, gIds);
+
+      if (res?.error) {
+        alert(res.error);
+      } else {
+        setEditingBookPrivacy(null);
+        router.refresh();
+      }
+    } catch (err) {
+      console.error(err);
+      alert('公開範囲の保存中にエラーが発生しました。');
+    } finally {
+      setPrivacySaving(false);
     }
   };
 
@@ -611,12 +675,12 @@ export default function DashboardClient({
 
                       {/* Top Overlay Badge for Privacy */}
                       <button
-                        onClick={() => handleToggleBookPrivacy(ub)}
+                        onClick={() => handleStartEditBookPrivacy(ub)}
                         style={{
                           position: 'absolute',
                           top: '8px',
                           right: '8px',
-                          background: 'rgba(0,0,0,0.6)',
+                          background: 'rgba(0,0,0,0.65)',
                           border: '1px solid rgba(255,255,255,0.1)',
                           borderRadius: '50%',
                           width: '28px',
@@ -624,13 +688,29 @@ export default function DashboardClient({
                           display: 'flex',
                           alignItems: 'center',
                           justifyContent: 'center',
-                          color: ub.isPublic ? 'var(--color-secondary)' : 'var(--text-secondary)',
+                          color: ub.isPublic
+                            ? 'var(--color-secondary)'
+                            : (ub.groupShares && ub.groupShares.length > 0)
+                            ? 'var(--color-primary)'
+                            : 'var(--text-secondary)',
                           cursor: 'pointer',
                           backdropFilter: 'blur(4px)',
                         }}
-                        title={ub.isPublic ? '公開中 (クリックして非公開に)' : '非公開 (クリックして公開に)'}
+                        title={
+                          ub.isPublic
+                            ? '全体公開中 (クリックして変更)'
+                            : (ub.groupShares && ub.groupShares.length > 0)
+                            ? 'グループ限定公開中 (クリックして変更)'
+                            : '非公開 (クリックして変更)'
+                        }
                       >
-                        {ub.isPublic ? <Eye size={14} /> : <EyeOff size={14} />}
+                        {ub.isPublic ? (
+                          <Globe size={14} />
+                        ) : (ub.groupShares && ub.groupShares.length > 0) ? (
+                          <Users size={14} />
+                        ) : (
+                          <Lock size={14} />
+                        )}
                       </button>
 
                       {/* Progress Line */}
@@ -1124,29 +1204,58 @@ export default function DashboardClient({
               </div>
 
               <div className="form-group">
-                <label>プライバシー設定</label>
-                <div style={{ display: 'flex', gap: '0.75rem', marginTop: '0.25rem' }}>
-                  <button
-                    type="button"
-                    className={`btn ${!noteIsPublic ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem', padding: '0.5rem', fontSize: '0.8rem' }}
-                    onClick={() => setNoteIsPublic(false)}
-                    disabled={noteSaving}
-                  >
-                    <Lock size={14} />
-                    <span>自分のみ (Private)</span>
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn ${noteIsPublic ? 'btn-primary' : 'btn-secondary'}`}
-                    style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.25rem', padding: '0.5rem', fontSize: '0.8rem' }}
-                    onClick={() => setNoteIsPublic(true)}
-                    disabled={noteSaving}
-                  >
-                    <Globe size={14} />
-                    <span>パブリック公開 (Public)</span>
-                  </button>
+                <label>公開範囲 (プライバシー設定)</label>
+                <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.25rem', flexWrap: 'wrap' }}>
+                  {[
+                    { val: 'private', label: '🔒 非公開', desc: '自分のみ' },
+                    { val: 'group', label: '👥 限定公開', desc: 'グループのみ' },
+                    { val: 'public', label: '🌐 全体公開', desc: 'コミュニティ' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.val}
+                      type="button"
+                      className={`btn ${notePrivacyMode === opt.val ? 'btn-primary' : 'btn-secondary'}`}
+                      style={{ flex: 1, minWidth: '90px', padding: '0.4rem 0.25rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', height: 'auto', gap: '0.1rem' }}
+                      onClick={() => setNotePrivacyMode(opt.val as any)}
+                      disabled={noteSaving}
+                    >
+                      <span style={{ fontWeight: 'bold' }}>{opt.label}</span>
+                      <span style={{ fontSize: '0.6rem', opacity: 0.8 }}>{opt.desc}</span>
+                    </button>
+                  ))}
                 </div>
+
+                {notePrivacyMode === 'group' && (
+                  <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>共有するグループを選択:</div>
+                    {myGroups.length === 0 ? (
+                      <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>参加しているグループがありません。</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                        {myGroups.map((group) => {
+                          const checked = noteSelectedGroupIds.includes(group.id);
+                          return (
+                            <label key={group.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setNoteSelectedGroupIds([...noteSelectedGroupIds, group.id]);
+                                  } else {
+                                    setNoteSelectedGroupIds(noteSelectedGroupIds.filter((id) => id !== group.id));
+                                  }
+                                }}
+                                disabled={noteSaving}
+                              />
+                              <span>{group.name}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               <button
@@ -1158,6 +1267,115 @@ export default function DashboardClient({
                 {noteSaving ? '保存中...' : isEditingNote ? '更新する' : 'インスピレーションを保存'}
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* --- BOOK PRIVACY MODAL --- */}
+      {editingBookPrivacy && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '1rem',
+          }}
+        >
+          <div className="glass-panel" style={{ width: '100%', maxWidth: '450px', position: 'relative', animation: 'scale-up 0.2s ease-out' }}>
+            <h2 style={{ fontFamily: 'var(--font-serif)', fontSize: '1.4rem', marginBottom: '0.75rem', borderBottom: '1px solid var(--glass-border)', paddingBottom: '0.5rem' }}>
+              🔒 公開範囲の変更
+            </h2>
+            
+            <div style={{ marginBottom: '1.25rem' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>対象書籍</div>
+              <div style={{ fontWeight: 600, color: 'var(--text-primary)', fontSize: '0.95rem' }}>{editingBookPrivacy.book.title}</div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>著者: {editingBookPrivacy.book.author}</div>
+            </div>
+
+            <div className="form-group" style={{ marginBottom: '1.25rem' }}>
+              <label style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.85rem' }}>公開範囲</label>
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                {[
+                  { val: 'private', label: '🔒 非公開', desc: '自分のみ' },
+                  { val: 'group', label: '👥 限定公開', desc: 'グループのみ' },
+                  { val: 'public', label: '🌐 全体公開', desc: 'コミュニティ' },
+                ].map((opt) => (
+                  <button
+                    key={opt.val}
+                    type="button"
+                    className={`btn ${editingBookPrivacyMode === opt.val ? 'btn-primary' : 'btn-secondary'}`}
+                    style={{ flex: 1, minWidth: '90px', padding: '0.4rem 0.25rem', fontSize: '0.75rem', display: 'flex', flexDirection: 'column', height: 'auto', gap: '0.1rem' }}
+                    onClick={() => setEditingBookPrivacyMode(opt.val as any)}
+                    disabled={privacySaving}
+                  >
+                    <span style={{ fontWeight: 'bold' }}>{opt.label}</span>
+                    <span style={{ fontSize: '0.6rem', opacity: 0.8 }}>{opt.desc}</span>
+                  </button>
+                ))}
+              </div>
+
+              {editingBookPrivacyMode === 'group' && (
+                <div style={{ marginTop: '0.75rem', padding: '0.75rem', background: 'rgba(255,255,255,0.02)', border: '1px solid var(--glass-border)', borderRadius: '8px' }}>
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', marginBottom: '0.5rem', fontWeight: 600 }}>共有するグループを選択:</div>
+                  {myGroups.length === 0 ? (
+                    <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>参加しているグループがありません。</p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                      {myGroups.map((group) => {
+                        const checked = editingBookSelectedGroupIds.includes(group.id);
+                        return (
+                          <label key={group.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.85rem', cursor: 'pointer' }}>
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setEditingBookSelectedGroupIds([...editingBookSelectedGroupIds, group.id]);
+                                } else {
+                                  setEditingBookSelectedGroupIds(editingBookSelectedGroupIds.filter((id) => id !== group.id));
+                                }
+                              }}
+                              disabled={privacySaving}
+                            />
+                            <span>{group.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end', borderTop: '1px solid var(--glass-border)', paddingTop: '1rem' }}>
+              <button
+                type="button"
+                onClick={() => setEditingBookPrivacy(null)}
+                className="btn btn-secondary"
+                style={{ padding: '0.4rem 0.85rem', fontSize: '0.85rem' }}
+                disabled={privacySaving}
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveBookPrivacy}
+                className="btn btn-primary"
+                style={{ padding: '0.4rem 1.25rem', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                disabled={privacySaving}
+              >
+                {privacySaving ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
+                <span>設定を保存</span>
+              </button>
+            </div>
           </div>
         </div>
       )}

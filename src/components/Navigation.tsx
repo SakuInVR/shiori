@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
-import { BookOpen, Compass, Plus, LogOut, LogIn, UserPlus, Sparkles } from 'lucide-react';
+import { BookOpen, Compass, Plus, LogOut, LogIn, UserPlus, Sparkles, Users } from 'lucide-react';
 import { useState } from 'react';
 
 export default function Navigation() {
@@ -52,6 +52,16 @@ export default function Navigation() {
                   >
                     <Sparkles size={16} />
                     <span>マイ本棚</span>
+                  </Link>
+                </li>
+                <li>
+                  <Link
+                    href="/groups"
+                    className={`nav-link ${isActive('/groups') ? 'active' : ''}`}
+                    style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}
+                  >
+                    <Users size={16} />
+                    <span>グループ</span>
                   </Link>
                 </li>
                 <li>
@@ -135,9 +145,9 @@ export default function Navigation() {
         
         {status === 'authenticated' && session ? (
           <>
-            <Link href="/canvas" className={`mobile-nav-item ${isActive('/canvas') ? 'active' : ''}`}>
-              <Sparkles size={20} />
-              <span>キャンバス</span>
+            <Link href="/groups" className={`mobile-nav-item ${isActive('/groups') ? 'active' : ''}`}>
+              <Users size={20} />
+              <span>グループ</span>
             </Link>
             
             <div className="mobile-fab-item">
@@ -146,29 +156,14 @@ export default function Navigation() {
               </Link>
             </div>
             
+            <Link href="/canvas" className={`mobile-nav-item ${isActive('/canvas') ? 'active' : ''}`}>
+              <Sparkles size={20} />
+              <span>キャンバス</span>
+            </Link>
+            
             <Link href="/dashboard" className={`mobile-nav-item ${isActive('/dashboard') ? 'active' : ''}`}>
               <BookOpen size={20} />
               <span>マイ本棚</span>
-            </Link>
-            
-            <Link href={`/users/${session.user?.name || 'me'}`} className={`mobile-nav-item ${isActive(`/users/${session.user?.name}`) ? 'active' : ''}`}>
-              <div
-                style={{
-                  width: '20px',
-                  height: '20px',
-                  borderRadius: '50%',
-                  background: 'var(--grad-cosmic)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: '0.65rem',
-                  fontWeight: 'bold',
-                  color: 'white',
-                }}
-              >
-                {session.user?.name ? session.user.name.charAt(0).toUpperCase() : 'U'}
-              </div>
-              <span style={{ fontSize: '0.6rem', marginTop: '0.1rem' }}>マイ公開</span>
             </Link>
           </>
         ) : (

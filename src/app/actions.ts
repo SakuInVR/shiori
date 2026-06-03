@@ -59,6 +59,7 @@ export async function addBookToShelf(bookData: {
   pageCount: number | null;
   status: string;
   isPublic: boolean;
+  groupIds?: string[];
 }) {
   const user = await getCurrentUser();
   if (!user) return { error: 'ログインが必要です。' };
@@ -97,7 +98,7 @@ export async function addBookToShelf(bookData: {
     }
 
     // 3. Create UserBook entry
-    await db.userBook.create({
+    const userBook = await db.userBook.create({
       data: {
         userId: user.id,
         bookId: book.id,
@@ -106,6 +107,18 @@ export async function addBookToShelf(bookData: {
         currentPage: 0,
       },
     });
+
+    // 4. Share with groups if group IDs are provided
+    if (bookData.groupIds && bookData.groupIds.length > 0) {
+      for (const gid of bookData.groupIds) {
+        await db.groupShare.create({
+          data: {
+            groupId: gid,
+            userBookId: userBook.id,
+          },
+        });
+      }
+    }
 
     revalidatePath('/dashboard');
     revalidatePath('/explore');
@@ -209,6 +222,7 @@ export async function createInspirationNote(noteData: {
   tag: string;
   cardStyle: string;
   isPublic: boolean;
+  groupIds?: string[];
 }) {
   const user = await getCurrentUser();
   if (!user) return { error: 'ログインが必要です。' };
@@ -249,6 +263,18 @@ export async function createInspirationNote(noteData: {
         }
       }
     });
+
+    // Share with groups if group IDs are provided
+    if (noteData.groupIds && noteData.groupIds.length > 0) {
+      for (const gid of noteData.groupIds) {
+        await db.groupNoteShare.create({
+          data: {
+            groupId: gid,
+            inspirationId: note.id,
+          },
+        });
+      }
+    }
 
     revalidatePath('/dashboard');
     revalidatePath('/explore');
@@ -406,6 +432,7 @@ export async function updateInspirationNote(
     tag: string;
     cardStyle: string;
     isPublic: boolean;
+    groupIds?: string[];
   }
 ) {
   const user = await getCurrentUser();
@@ -451,6 +478,32 @@ export async function updateInspirationNote(
       }
     });
 
+    // Sync group shares if groupIds are provided
+    if (noteData.groupIds) {
+      await db.groupNoteShare.deleteMany({
+        where: {
+          inspirationId: noteId,
+          groupId: { notIn: noteData.groupIds },
+        },
+      });
+
+      for (const gid of noteData.groupIds) {
+        await db.groupNoteShare.upsert({
+          where: {
+            groupId_inspirationId: {
+              groupId: gid,
+              inspirationId: noteId,
+            },
+          },
+          create: {
+            groupId: gid,
+            inspirationId: noteId,
+          },
+          update: {},
+        });
+      }
+    }
+
     revalidatePath('/dashboard');
     revalidatePath('/explore');
     revalidatePath('/canvas');
@@ -492,5 +545,488 @@ export async function searchBooks(query: string) {
   } catch (error: any) {
     console.error('Google Books Search API error:', error);
     return { error: '書籍検索中にエラーが発生しました。インターネット接続をご確認ください。' };
+  }
+}
+
+// 12. Fetch all unique authors in the database for autocompletion
+export async function getExistingAuthors() {
+  try {
+    const books = await db.book.findMany({
+      select: { author: true },
+    });
+    
+    const authorSet = new Set<string>();
+    books.forEach((b) => {
+      if (b.author) {
+        b.author.split(', ').forEach((auth) => {
+          const trimmed = auth.trim();
+          if (trimmed) authorSet.add(trimmed);
+        });
+      }
+    });
+
+    return Array.from(authorSet).sort();
+  } catch (error: any) {
+    console.error('Failed to get existing authors:', error);
+    return [];
+  }
+}
+
+// 13. Create a reading group
+export async function createGroup(name: string, description?: string) {
+  const user = await getCurrentUser();
+  if (!user) return { error: 'ログインが必要です。' };
+
+  if (!name.trim()) return { error: 'グループ名を入力してください。' };
+
+  try {
+    let inviteCode = '';
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    let codeExists = true;
+    while (codeExists) {
+      inviteCode = '';
+      for (let i = 0; i < 8; i++) {
+        inviteCode += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      const existing = await db.group.findUnique({ where: { inviteCode } });
+      if (!existing) codeExists = false;
+    }
+
+    const group = await db.group.create({
+      data: {
+        name: name.trim(),
+        description: description?.trim() || null,
+        inviteCode,
+        createdById: user.id,
+        members: {
+          create: {
+            userId: user.id,
+            role: 'admin',
+          },
+        },
+      },
+    });
+
+    revalidatePath('/groups');
+    return { success: true, groupId: group.id };
+  } catch (error: any) {
+    console.error('Failed to create group:', error);
+    return { error: 'グループの作成に失敗しました。' };
+  }
+}
+
+// 14. Join a group with an invite code
+export async function joinGroup(inviteCode: string) {
+  const user = await getCurrentUser();
+  if (!user) return { error: 'ログインが必要です。' };
+
+  const code = inviteCode.trim().toUpperCase();
+  if (!code) return { error: '招待コードを入力してください。' };
+
+  try {
+    const group = await db.group.findUnique({
+      where: { inviteCode: code },
+    });
+
+    if (!group) {
+      return { error: '招待コードが無効です。グループが見つかりません。' };
+    }
+
+    // Check if already a member
+    const existingMember = await db.groupMember.findUnique({
+      where: {
+        groupId_userId: {
+          groupId: group.id,
+          userId: user.id,
+        },
+      },
+    });
+
+    if (existingMember) {
+      return { error: 'すでにこのグループに参加しています。', groupId: group.id };
+    }
+
+    await db.groupMember.create({
+      data: {
+        groupId: group.id,
+        userId: user.id,
+        role: 'member',
+      },
+    });
+
+    revalidatePath('/groups');
+    return { success: true, groupId: group.id };
+  } catch (error: any) {
+    console.error('Failed to join group:', error);
+    return { error: 'グループの参加に失敗しました。' };
+  }
+}
+
+// 15. Get all groups user belongs to
+export async function getGroups() {
+  const user = await getCurrentUser();
+  if (!user) return [];
+
+  try {
+    const memberships = await db.groupMember.findMany({
+      where: { userId: user.id },
+      include: {
+        group: {
+          include: {
+            _count: {
+              select: {
+                members: true,
+                books: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        joinedAt: 'desc',
+      },
+    });
+
+    return memberships.map((m) => ({
+      id: m.group.id,
+      name: m.group.name,
+      description: m.group.description,
+      inviteCode: m.group.inviteCode,
+      createdById: m.group.createdById,
+      createdAt: m.group.createdAt,
+      memberCount: m.group._count.members,
+      bookCount: m.group._count.books,
+      role: m.role,
+    }));
+  } catch (error) {
+    console.error('Failed to get groups:', error);
+    return [];
+  }
+}
+
+// 16. Get group details (info, books with members progress, activity feed)
+export async function getGroupDetails(groupId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { error: 'ログインが必要です。' };
+
+  try {
+    const membership = await db.groupMember.findUnique({
+      where: {
+        groupId_userId: {
+          groupId,
+          userId: user.id,
+        },
+      },
+    });
+
+    if (!membership) {
+      return { error: 'このグループにアクセスする権限がありません。' };
+    }
+
+    const group = await db.group.findUnique({
+      where: { id: groupId },
+      include: {
+        members: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                username: true,
+              },
+            },
+          },
+          orderBy: {
+            joinedAt: 'asc',
+          },
+        },
+        books: {
+          include: {
+            book: true,
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
+      },
+    });
+
+    if (!group) return { error: 'グループが見つかりません。' };
+
+    const bookIds = group.books.map((gb) => gb.bookId);
+    const memberUserIds = group.members.map((m) => m.userId);
+
+    const groupShares = await db.groupShare.findMany({
+      where: {
+        groupId,
+        userBook: {
+          userId: { in: memberUserIds },
+          bookId: { in: bookIds },
+        },
+      },
+      include: {
+        userBook: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                username: true,
+              },
+            },
+            book: true,
+          },
+        },
+      },
+    });
+
+    const progressMap: Record<string, Array<{
+      userId: string;
+      name: string;
+      currentPage: number;
+      pageCount: number | null;
+      status: string;
+      updatedAt: Date;
+    }>> = {};
+
+    groupShares.forEach((gs) => {
+      const ub = gs.userBook;
+      if (!progressMap[ub.bookId]) {
+        progressMap[ub.bookId] = [];
+      }
+      progressMap[ub.bookId].push({
+        userId: ub.userId,
+        name: ub.user.name || ub.user.username || '匿名ユーザー',
+        currentPage: ub.currentPage,
+        pageCount: ub.book.pageCount,
+        status: ub.status,
+        updatedAt: ub.updatedAt,
+      });
+    });
+
+    const sharedNotes = await db.groupNoteShare.findMany({
+      where: { groupId },
+      include: {
+        inspiration: {
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                username: true,
+              },
+            },
+            userBook: {
+              include: {
+                book: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 50,
+    });
+
+    const feedNotes = sharedNotes.map((sn) => sn.inspiration).filter(Boolean);
+
+    return {
+      group: {
+        id: group.id,
+        name: group.name,
+        description: group.description,
+        inviteCode: group.inviteCode,
+        createdById: group.createdById,
+        createdAt: group.createdAt,
+      },
+      members: group.members.map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        name: m.user.name || m.user.username || '不明',
+        role: m.role,
+        joinedAt: m.joinedAt,
+      })),
+      books: group.books.map((gb) => ({
+        id: gb.id,
+        bookId: gb.bookId,
+        title: gb.book.title,
+        author: gb.book.author,
+        coverUrl: gb.book.coverUrl,
+        pageCount: gb.book.pageCount,
+        googleBooksId: gb.book.googleBooksId,
+        progress: progressMap[gb.bookId] || [],
+      })),
+      notes: feedNotes,
+      role: membership.role,
+    };
+  } catch (error) {
+    console.error('Failed to get group details:', error);
+    return { error: 'グループ詳細の取得中にエラーが発生しました。' };
+  }
+}
+
+// 17. Add a book to a group shelf
+export async function addBookToGroup(groupId: string, bookId: string) {
+  const user = await getCurrentUser();
+  if (!user) return { error: 'ログインが必要です。' };
+
+  try {
+    const membership = await db.groupMember.findUnique({
+      where: {
+        groupId_userId: {
+          groupId,
+          userId: user.id,
+        },
+      },
+    });
+
+    if (!membership) return { error: 'グループのメンバーではありません。' };
+
+    const existingGroupBook = await db.groupBook.findUnique({
+      where: {
+        groupId_bookId: {
+          groupId,
+          bookId,
+        },
+      },
+    });
+
+    if (existingGroupBook) {
+      return { error: 'この本はすでにグループに追加されています。' };
+    }
+
+    await db.groupBook.create({
+      data: {
+        groupId,
+        bookId,
+        addedById: user.id,
+      },
+    });
+
+    // Auto share user's own reading status of this book to the group if they have it on shelf
+    const userBook = await db.userBook.findUnique({
+      where: {
+        userId_bookId: {
+          userId: user.id,
+          bookId,
+        },
+      },
+    });
+
+    if (userBook) {
+      await db.groupShare.upsert({
+        where: {
+          groupId_userBookId: {
+            groupId,
+            userBookId: userBook.id,
+          },
+        },
+        create: {
+          groupId,
+          userBookId: userBook.id,
+        },
+        update: {},
+      });
+    }
+
+    revalidatePath(`/groups/${groupId}`);
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to add book to group:', error);
+    return { error: 'グループへの本の追加に失敗しました。' };
+  }
+}
+
+// 18. Share user book progress to groups
+export async function shareBookToGroups(userBookId: string, groupIds: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { error: 'ログインが必要です。' };
+
+  try {
+    const userBook = await db.userBook.findUnique({
+      where: { id: userBookId },
+    });
+
+    if (!userBook || userBook.userId !== user.id) {
+      return { error: '本棚の書籍データが見つかりません。' };
+    }
+
+    // Delete existing shares not in the new groupIds
+    await db.groupShare.deleteMany({
+      where: {
+        userBookId,
+        groupId: { notIn: groupIds },
+      },
+    });
+
+    // Create new shares
+    for (const gid of groupIds) {
+      await db.groupShare.upsert({
+        where: {
+          groupId_userBookId: {
+            groupId: gid,
+            userBookId,
+          },
+        },
+        create: {
+          groupId: gid,
+          userBookId,
+        },
+        update: {},
+      });
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to share book to groups:', error);
+    return { error: 'グループ共有の更新に失敗しました。' };
+  }
+}
+
+// 19. Share note to groups
+export async function shareNoteToGroups(inspirationId: string, groupIds: string[]) {
+  const user = await getCurrentUser();
+  if (!user) return { error: 'ログインが必要です。' };
+
+  try {
+    const inspiration = await db.inspiration.findUnique({
+      where: { id: inspirationId },
+    });
+
+    if (!inspiration || inspiration.userId !== user.id) {
+      return { error: 'インスピレーションノートが見つかりません。' };
+    }
+
+    // Delete existing shares not in the new groupIds
+    await db.groupNoteShare.deleteMany({
+      where: {
+        inspirationId,
+        groupId: { notIn: groupIds },
+      },
+    });
+
+    // Create new shares
+    for (const gid of groupIds) {
+      await db.groupNoteShare.upsert({
+        where: {
+          groupId_inspirationId: {
+            groupId: gid,
+            inspirationId,
+          },
+        },
+        create: {
+          groupId: gid,
+          inspirationId,
+        },
+        update: {},
+      });
+    }
+
+    return { success: true };
+  } catch (error) {
+    console.error('Failed to share note to groups:', error);
+    return { error: 'ノートのグループ共有に失敗しました。' };
   }
 }
